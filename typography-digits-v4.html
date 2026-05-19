@@ -1,0 +1,1527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Typography Digits — Shaz Moghaddam</title>
+
+  <!--
+  ╔══════════════════════════════════════════════════════════════════════╗
+  ║  TYPOGRAPHY DIGITS 0–9  ·  v4 — Edge-Fill Edition                    ║
+  ║                                                                      ║
+  ║  HOW IT WORKS                                                        ║
+  ║  1. Each digit is rendered onto an offscreen <canvas> → pixel mask.  ║
+  ║  2. Words are placed tier by tier (large → medium → small → tiny).   ║
+  ║  3. Every candidate box passes a TWO-GATE mask test:                 ║
+  ║       GATE A (hard) — centre pixel must be inside the glyph.         ║
+  ║       GATE B (soft) — ≥ 50 % of a 5×5 sample grid inside the glyph. ║
+  ║       The low soft-threshold lets edge words fill the contours;      ║
+  ║       the hard centre gate prevents fully-outside placements.        ║
+  ║  4. AABB collision check with 1.5 px padding keeps words readable.   ║
+  ║  5. Accepted positions → SVG <text> inside a <clipPath>.             ║
+  ║  6. document.fonts.ready ensures Roboto metrics match the SVG.       ║
+  ║                                                                      ║
+  ║  KEY TUNABLES (all in the CONFIGURATION block in the <script>)       ║
+  ║  • TIERS         — font-size, weight, target count, attempt budget   ║
+  ║  • WORD_PADDING  — px gap between word bounding boxes                ║
+  ║  • SOFT_THRESHOLD— fraction of sample pts inside (Gate B)            ║
+  ║  • WORDS         — vocabulary pool                                   ║
+  ║  • COLOUR_RULES  — keyword → .w-* class mapping                      ║
+  ╚══════════════════════════════════════════════════════════════════════╝
+  -->
+
+  <!-- Google Fonts: Roboto 400 regular · 700 bold · 900 black -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700;900&display=swap"
+    rel="stylesheet"
+  />
+
+  <style>
+    /* ═══════════════════════════════════════════════════════
+       § 1  COLOUR PALETTE
+       Override any variable here to retheme; the .w-* fill
+       classes in § 7 reference these automatically.
+       ═══════════════════════════════════════════════════════ */
+    :root {
+      /* Yellows / Golds */
+      --c-gold:        #FFC81E;
+      --c-gold-deep:   #FFC900;
+      --c-amber:       #FFB823;
+      /* Reds / Oranges */
+      --c-vermillion:  #FF4400;
+      --c-orange:      #FA8112;
+      --c-red:         #FF0000;
+      --c-coral:       #FA5C5C;
+      --c-tangerine:   #FF6500;
+      /* Blues */
+      --c-blue:        #0046FF;
+      --c-slate:       #3B7597;
+      /* Pinks / Purples */
+      --c-crimson:     #EA2264;
+      --c-lavender:    #CB9DF0;
+      /* Teals / Greens */
+      --c-aqua:        #6DE1D2;
+      --c-sage:        #6A9C89;
+      --c-teal:        #36ADA3;
+      /* Olive */
+      --c-olive:       #898121;
+
+      /* Layout */
+      --grid-cols: 5;
+      --grid-gap:  clamp(0.5rem, 1.5vw, 1.2rem);
+      --page-pad:  clamp(1rem, 4vw, 3rem);
+
+      /* Toggle active colour — fixed yellow regardless of palette or bg mode */
+      --toggle-active: #FFC81E;
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       § 2  RESET & BASE
+       ═══════════════════════════════════════════════════════ */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #000;          /* Solid black background */
+      min-height: 100vh;
+      padding: var(--page-pad);
+      font-family: 'Roboto', Arial, Helvetica, sans-serif;
+      font-weight: 400;
+      color: #ccc;
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       § 3  PAGE HEADER — full-width fixed nav bar
+       ═══════════════════════════════════════════════════════ */
+    header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 40px;
+      background: rgba(0, 0, 0, 0.72);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    /* ── Left side: identity + location ── */
+    .header-identity {
+      display: flex;
+      align-items: baseline;
+      gap: 0.55rem;
+      flex-wrap: wrap;
+    }
+    .header-title {
+      font-family: 'Roboto', Arial, Helvetica, sans-serif;
+      font-size: clamp(0.78rem, 1.3vw, 0.95rem);
+      font-weight: 700;
+      color: #f0f0f0;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+    .header-sep {
+      color: rgba(255, 255, 255, 0.25);
+      font-weight: 400;
+      font-size: 0.85em;
+    }
+    .header-location {
+      font-family: 'Roboto', Arial, Helvetica, sans-serif;
+      font-size: clamp(0.72rem, 1.1vw, 0.85rem);
+      font-weight: 400;
+      color: #666;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+
+    /* ── Right side: actionable links ── */
+    .header-links {
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+    }
+    .header-links a {
+      font-family: 'Roboto', Arial, Helvetica, sans-serif;
+      font-size: clamp(0.72rem, 1.1vw, 0.85rem);
+      font-weight: 400;
+      color: #999;
+      text-decoration: none;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      transition: color 0.25s ease;
+      white-space: nowrap;
+    }
+    .header-links a:hover { color: #fff; }
+
+    /* Push page content below the fixed header */
+    body > :not(header) { margin-top: 80px; }
+
+    @media (max-width: 600px) {
+      header          { padding: 14px 20px; }
+      .header-links   { gap: 1rem; }
+      body > :not(header) { margin-top: 64px; }
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       § 5  DIGIT GRID
+       Responsive column count via --grid-cols.
+       ═══════════════════════════════════════════════════════ */
+    .digits-grid {
+      display: grid;
+      perspective: 1000px;
+      grid-template-columns: repeat(var(--grid-cols), 1fr);
+      gap: var(--grid-gap);
+      max-width: min(1400px, 100%);
+      margin: 0 auto;
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       § 6  DIGIT WRAPPER & SVG
+       ═══════════════════════════════════════════════════════ */
+    .digit-wrapper {
+      width: 100%;
+      aspect-ratio: 3 / 4;
+      opacity: 0;
+      cursor: pointer;
+      will-change: transform;
+      transform-style: preserve-3d;
+      transition: transform 0.12s ease-out;
+      animation: curtainReveal 0.85s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    .digit-svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    /* Hover: brighten + saturate the clipped word group only */
+    .digit-wrapper .digit-svg g {
+      transition: filter 0.4s ease;
+    }
+    .digit-wrapper:hover .digit-svg g {
+      filter: brightness(1.4) saturate(1.25);
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       § 7  WORD COLOUR CLASSES  (.w-<semantic-name>)
+       ─────────────────────────────────────────────────────
+       Applied to SVG <text> elements via the class attribute.
+       To remap a word to a different colour:
+         → find it in COLOUR_RULES (JS) and change the class.
+       To change a colour globally:
+         → update the matching --c-* variable in § 1.
+       ═══════════════════════════════════════════════════════ */
+
+    /* Yellows / Golds */
+    .w-gold        { fill: var(--c-gold);       }   /* #FFC81E */
+    .w-gold-deep   { fill: var(--c-gold-deep);  }   /* #FFC900 */
+    .w-amber       { fill: var(--c-amber);      }   /* #FFB823 */
+    /* Reds / Oranges */
+    .w-vermillion  { fill: var(--c-vermillion); }   /* #FF4400 */
+    .w-orange      { fill: var(--c-orange);     }   /* #FA8112 */
+    .w-red         { fill: var(--c-red);        }   /* #FF0000 */
+    .w-coral       { fill: var(--c-coral);      }   /* #FA5C5C */
+    .w-tangerine   { fill: var(--c-tangerine);  }   /* #FF6500 */
+    /* Blues */
+    .w-blue        { fill: var(--c-blue);       }   /* #0046FF */
+    .w-slate       { fill: var(--c-slate);      }   /* #3B7597 */
+    /* Pinks / Purples */
+    .w-crimson     { fill: var(--c-crimson);    }   /* #EA2264 */
+    .w-lavender    { fill: var(--c-lavender);   }   /* #CB9DF0 */
+    /* Teals / Greens */
+    .w-aqua        { fill: var(--c-aqua);       }   /* #6DE1D2 */
+    .w-sage        { fill: var(--c-sage);       }   /* #6A9C89 */
+    .w-teal        { fill: var(--c-teal);       }   /* #36ADA3 */
+    /* Olive */
+    .w-olive       { fill: var(--c-olive);      }   /* #898121 */
+
+    /* Smooth fill transition for palette swaps */
+    .word { transition: fill 0.7s ease; }
+
+    /* ═══════════════════════════════════════════════════════
+       § 8  ANIMATIONS
+       ─────────────────────────────────────────────────────
+       curtainReveal — digit entrance: clips upward from the
+                       baseline like a theatre curtain rising.
+                       cubic-bezier(0.16,1,0.3,1) = fast then
+                       eases softly into final position.
+
+       wordLife      — per-word breathing: each word fades in,
+                       glows, dims, and glows again independently.
+
+       shimmerSweep  — diagonal light gleam that sweeps across
+                       the digit every cycle. The rect starts at
+                       x=-VW (off-screen left) and translates
+                       +2×VW to exit off-screen right.
+
+       wordFlash     — snaps all words to full brightness on
+                       click then releases them back to --wo.
+       ═══════════════════════════════════════════════════════ */
+
+    @keyframes curtainReveal {
+      0%   { clip-path: inset(100% 0 0 0); opacity: 0; }
+      18%  { opacity: 1; }
+      100% { clip-path: inset(0%   0 0 0); opacity: 1; }
+    }
+
+    @keyframes wordLife {
+      0%   { opacity: 0; }
+      12%  { opacity: var(--wo, 1); }
+      52%  { opacity: calc(var(--wo, 1) * 0.38); }
+      100% { opacity: var(--wo, 1); }
+    }
+
+    @keyframes shimmerSweep {
+      0%   { transform: translateX(0px);   }   /* rect at x = -VW, off-screen left  */
+      42%  { transform: translateX(600px); }   /* rect at x = +VW, off-screen right */
+      100% { transform: translateX(600px); }   /* hold until next cycle             */
+    }
+
+    @keyframes wordFlash {
+      0%   { opacity: 1; }
+      35%  { opacity: 1; }
+      100% { opacity: var(--wo, 0.9); }
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       § 9  LOADING STATE
+       ═══════════════════════════════════════════════════════ */
+    .loading-skeleton {
+      display: grid;
+      grid-template-columns: repeat(var(--grid-cols), 1fr);
+      gap: var(--grid-gap);
+      max-width: min(1400px, 100%);
+      margin: 0 auto;
+    }
+    .skeleton-cell {
+      aspect-ratio: 3 / 4;
+      background: #111;
+      border-radius: 4px;
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    .skeleton-cell:nth-child(2n) { animation-delay: 0.2s; }
+    .skeleton-cell:nth-child(3n) { animation-delay: 0.4s; }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.4; }
+      50%       { opacity: 0.8; }
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       § 10  RESPONSIVE BREAKPOINTS
+       ═══════════════════════════════════════════════════════ */
+    @media (max-width: 1024px) { :root { --grid-cols: 4; } }
+    @media (max-width:  768px) { :root { --grid-cols: 3; } }
+    @media (max-width:  520px) { :root { --grid-cols: 2; } }
+
+    /* ═══════════════════════════════════════════════════════
+       § 11  TOGGLE SWITCHES & HEADER-RIGHT
+       ─────────────────────────────────────────────────────
+       .header-right    — two-row column: links on top,
+                          controls on bottom, right-aligned.
+       .controls        — flex row of all three controls,
+                          no divider (links are separate row).
+       .toggle-pill     — label wrapper (clickable area)
+       .toggle-track    — oval track background
+       .toggle-thumb    — sliding circle
+       .toggle-label    — text beside the switch
+       .palette-btn     — cycle button, same size as toggle-label
+       ═══════════════════════════════════════════════════════ */
+    .header-right {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 0.45rem;
+    }
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 1.1rem;
+    }
+    .toggle-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      cursor: pointer;
+      user-select: none;
+    }
+    /* Hide native checkbox — track + thumb replace it visually */
+    .toggle-pill input[type="checkbox"] {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+      pointer-events: none;
+    }
+    .toggle-track {
+      position: relative;
+      width: 30px;
+      height: 16px;
+      border-radius: 16px;
+      background: #2a2a2a;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      transition: background 0.25s ease, border-color 0.25s ease;
+      flex-shrink: 0;
+    }
+    .toggle-pill input:checked ~ .toggle-track {
+      background: var(--toggle-active);
+      border-color: var(--toggle-active);
+    }
+    .toggle-thumb {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #666;
+      transition: transform 0.25s ease, background 0.25s ease;
+    }
+    .toggle-pill input:checked ~ .toggle-track .toggle-thumb {
+      transform: translateX(14px);
+      background: #000; /* black thumb on yellow — readable in all modes */
+    }
+    .toggle-label {
+      font-family: 'Roboto', Arial, Helvetica, sans-serif;
+      font-size: clamp(0.6rem, 0.95vw, 0.72rem);
+      font-weight: 400;
+      color: #666;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      transition: color 0.25s ease;
+    }
+    .toggle-pill:hover .toggle-label { color: #aaa; }
+
+    /* ═══════════════════════════════════════════════════════
+       § 12  ANIMATION-OFF STATE
+       Body class .anim-off freezes all words at their
+       base opacity; the digit shape is unaffected.
+       ═══════════════════════════════════════════════════════ */
+    body.anim-off .word {
+      animation: none !important;
+      opacity: var(--wo, 0.9);
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       § 13  LIGHT BACKGROUND STATE
+       Body class .bg-light switches to a warm off-white
+       canvas and flips all header chrome to dark tones.
+       ═══════════════════════════════════════════════════════ */
+    body.bg-light {
+      background: #f0ede8;
+    }
+    body.bg-light header {
+      background: rgba(240, 237, 232, 0.88);
+      border-bottom-color: rgba(0, 0, 0, 0.08);
+    }
+    body.bg-light .header-title  { color: #111; }
+    body.bg-light .header-sep    { color: rgba(0, 0, 0, 0.2); }
+    body.bg-light .header-location { color: #888; }
+    body.bg-light .header-links a { color: #555; }
+    body.bg-light .header-links a:hover { color: #000; }
+    body.bg-light .toggle-label  { color: #888; }
+    body.bg-light .toggle-pill:hover .toggle-label { color: #333; }
+    body.bg-light .toggle-track {
+      background: #d0cdc8;
+      border-color: rgba(0, 0, 0, 0.15);
+    }
+    /* Checked track stays --toggle-active yellow in all modes — no override */
+    body.bg-light .skeleton-cell { background: #ddd; }
+
+    /* ═══════════════════════════════════════════════════════
+       § 14  SHIMMER RECT & DIGIT FLASH
+       ─────────────────────────────────────────────────────
+       .shimmer-rect  lives inside each SVG's clipped <g>.
+         mix-blend-mode:screen adds light to words beneath it
+         as it sweeps left → right. animation-delay is set
+         inline per-digit so sweeps are staggered.
+
+       .digit-flash .word  overrides wordLife for 1.5 s on
+         click: snaps to full brightness then releases.
+       ═══════════════════════════════════════════════════════ */
+    .shimmer-rect {
+      animation: shimmerSweep 12s ease-in-out infinite;
+      mix-blend-mode: screen;
+      pointer-events: none;
+    }
+    /* Pause shimmer when animations are off */
+    body.anim-off .shimmer-rect { animation: none; opacity: 0; }
+
+    /* Click flash — overrides wordLife for exactly 1.5 s */
+    .digit-flash .word {
+      animation: wordFlash 1.5s ease-out forwards !important;
+    }
+    /* Also boost the group filter on flash */
+    .digit-flash .digit-svg g {
+      filter: brightness(1.6) saturate(1.3);
+      transition: filter 0.15s ease;
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       § 15  NOISE / GRAIN TEXTURE
+       A fixed pseudo-element lays a repeating SVG fractal-
+       noise tile over the whole page at ~4 % opacity.
+       Adds tactile depth to the black canvas.
+       ═══════════════════════════════════════════════════════ */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 90;
+      opacity: 0.038;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.88' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-size: 200px 200px;
+      background-repeat: repeat;
+    }
+    body.bg-light::before { opacity: 0.018; }
+
+    /* ═══════════════════════════════════════════════════════
+       § 16  COLOUR PALETTE THEMES
+       ─────────────────────────────────────────────────────
+       body[data-palette="0"]  = Vibrant  (default, no overrides)
+       body[data-palette="1"]  = Cool     (blues · teals · purples)
+       body[data-palette="2"]  = Warm     (ambers · corals · golds)
+
+       All .w-* fill classes use CSS vars, so swapping the
+       vars here is enough — no JS colour changes needed.
+       The .word { transition: fill } rule gives a smooth
+       0.7 s cross-fade between palettes.
+       ═══════════════════════════════════════════════════════ */
+
+    /* ── Palette 1: Cool ── */
+    body[data-palette="1"] {
+      --c-gold:        #60A5FA;
+      --c-gold-deep:   #3B82F6;
+      --c-amber:       #818CF8;
+      --c-vermillion:  #A78BFA;
+      --c-orange:      #6366F1;
+      --c-blue:        #38BDF8;
+      --c-crimson:     #E879F9;
+      --c-aqua:        #34D399;
+      --c-lavender:    #A5F3FC;
+      --c-sage:        #6EE7B7;
+      --c-olive:       #4ADE80;
+      --c-red:         #F472B6;
+      --c-coral:       #C084FC;
+      --c-tangerine:   #22D3EE;
+      --c-teal:        #2DD4BF;
+      --c-slate:       #94A3B8;
+    }
+
+    /* ── Palette 2: Warm ── */
+    body[data-palette="2"] {
+      --c-gold:        #FCD34D;
+      --c-gold-deep:   #FBBF24;
+      --c-amber:       #F59E0B;
+      --c-vermillion:  #EF4444;
+      --c-orange:      #F97316;
+      --c-blue:        #FB923C;
+      --c-crimson:     #E11D48;
+      --c-aqua:        #FDE68A;
+      --c-lavender:    #FCA5A5;
+      --c-sage:        #D97706;
+      --c-olive:       #92400E;
+      --c-red:         #DC2626;
+      --c-coral:       #F87171;
+      --c-tangerine:   #FDBA74;
+      --c-teal:        #EA580C;
+      --c-slate:       #B45309;
+    }
+
+    /* ── Palette cycle button — same dimensions as .toggle-label ── */
+    .palette-btn {
+      display: flex;
+      align-items: center;
+      gap: 0.2rem;
+      font-family: 'Roboto', Arial, Helvetica, sans-serif;
+      font-size: clamp(0.6rem, 0.95vw, 0.72rem);
+      font-weight: 400;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: #666;
+      background: transparent;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      transition: color 0.25s ease;
+      white-space: nowrap;
+      line-height: 1;
+    }
+    .palette-btn:hover          { color: #aaa; }
+    .palette-arrow              { font-size: 0.8em; opacity: 0.5; transition: transform 0.2s ease; }
+    .palette-btn:hover .palette-arrow { transform: translateX(2px); }
+    body.bg-light .palette-btn       { color: #888; }
+    body.bg-light .palette-btn:hover { color: #333; }
+
+    /* ═══════════════════════════════════════════════════════
+       § 17  NEON GLOW MODE  (body.glow-on)
+       Warm gold bloom via layered drop-shadow filters.
+       Intensifies on hover and click-flash.
+       Softens automatically in light mode.
+       ═══════════════════════════════════════════════════════ */
+    body.glow-on .digit-svg g {
+      filter:
+        drop-shadow(0 0 2px  rgba(255, 248, 180, 0.80))
+        drop-shadow(0 0 7px  rgba(255, 220,  80, 0.45))
+        drop-shadow(0 0 18px rgba(255, 190,  30, 0.20));
+    }
+    body.glow-on .digit-wrapper:hover .digit-svg g {
+      filter:
+        brightness(1.2) saturate(1.1)
+        drop-shadow(0 0 3px  rgba(255, 248, 180, 1.00))
+        drop-shadow(0 0 10px rgba(255, 220,  80, 0.60))
+        drop-shadow(0 0 22px rgba(255, 190,  30, 0.35));
+    }
+    body.glow-on .digit-flash .digit-svg g {
+      filter:
+        brightness(1.4) saturate(1.2)
+        drop-shadow(0 0 5px  rgba(255, 255, 200, 1.00))
+        drop-shadow(0 0 14px rgba(255, 230,  80, 0.80))
+        drop-shadow(0 0 28px rgba(255, 190,  30, 0.50));
+    }
+    body.glow-on.bg-light .digit-svg g {
+      filter:
+        drop-shadow(0 0 2px rgba(0, 0, 0, 0.18))
+        drop-shadow(0 0 6px rgba(0, 0, 0, 0.08));
+    }
+    body.glow-on.bg-light .digit-wrapper:hover .digit-svg g {
+      filter:
+        drop-shadow(0 0 3px rgba(0, 0, 0, 0.28))
+        drop-shadow(0 0 9px rgba(0, 0, 0, 0.12));
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       § 18  SPEED SLIDER
+       Styled range input; thumb uses --toggle-active yellow.
+       ═══════════════════════════════════════════════════════ */
+    .speed-control { cursor: default; }
+    .speed-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 52px;
+      height: 2px;
+      background: #333;
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+      transition: background 0.25s ease;
+      vertical-align: middle;
+    }
+    .speed-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--toggle-active);
+      border: none;
+      cursor: pointer;
+    }
+    .speed-slider::-moz-range-thumb {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--toggle-active);
+      border: none;
+      cursor: pointer;
+    }
+    body.bg-light .speed-slider { background: #ccc; }
+
+    /* ═══════════════════════════════════════════════════════
+       § 19  WORD INPUT POPOVER
+       .add-word-btn  — circular "+" icon button
+       .word-popover  — absolutely-positioned input card
+       .word-text-input / .word-submit-btn — field + enter btn
+       ═══════════════════════════════════════════════════════ */
+    .word-input-wrap { position: relative; }
+
+    .add-word-btn {
+      font-family: 'Roboto', Arial, Helvetica, sans-serif;
+      font-size: 0.78rem;
+      font-weight: 700;
+      line-height: 1;
+      color: #555;
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 50%;
+      width: 18px; height: 18px;
+      padding: 0;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.2s ease, border-color 0.2s ease;
+      flex-shrink: 0;
+    }
+    .add-word-btn:hover {
+      color: var(--toggle-active);
+      border-color: var(--toggle-active);
+    }
+    body.bg-light .add-word-btn {
+      color: #888;
+      border-color: rgba(0, 0, 0, 0.2);
+    }
+    body.bg-light .add-word-btn:hover {
+      color: #333;
+      border-color: #333;
+    }
+
+    .word-popover {
+      position: absolute;
+      top: calc(100% + 12px);
+      right: 0;
+      background: #1c1c1c;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      padding: 10px;
+      display: flex;
+      gap: 6px;
+      z-index: 1001;
+      min-width: 210px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+      animation: popoverIn 0.18s ease;
+    }
+    @keyframes popoverIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0);    }
+    }
+    .word-popover[hidden] { display: none !important; }
+
+    .word-text-input {
+      flex: 1;
+      min-width: 0;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 5px;
+      color: #e0e0e0;
+      font-family: 'Roboto', Arial, sans-serif;
+      font-size: 0.78rem;
+      padding: 5px 9px;
+      outline: none;
+      transition: border-color 0.2s ease;
+    }
+    .word-text-input::placeholder { color: #444; }
+    .word-text-input:focus { border-color: var(--toggle-active); }
+
+    .word-submit-btn {
+      background: var(--toggle-active);
+      border: none;
+      border-radius: 5px;
+      color: #000;
+      font-family: 'Roboto', Arial, sans-serif;
+      font-weight: 700;
+      font-size: 0.82rem;
+      padding: 5px 11px;
+      cursor: pointer;
+      transition: opacity 0.2s ease;
+      white-space: nowrap;
+    }
+    .word-submit-btn:hover { opacity: 0.78; }
+
+    body.bg-light .word-popover {
+      background: #fff;
+      border-color: rgba(0, 0, 0, 0.1);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.1);
+    }
+    body.bg-light .word-text-input {
+      background: rgba(0, 0, 0, 0.04);
+      border-color: rgba(0, 0, 0, 0.12);
+      color: #222;
+    }
+    body.bg-light .word-text-input::placeholder { color: #aaa; }
+    body.bg-light .word-text-input:focus { border-color: #555; }
+
+    /* ═══════════════════════════════════════════════════════
+       § 20  PREFERS-REDUCED-MOTION
+       Disables all animations for users who opt out via OS
+       accessibility settings. Fill transitions are kept so
+       palette swaps still cross-fade gracefully.
+       ═══════════════════════════════════════════════════════ */
+    @media (prefers-reduced-motion: reduce) {
+      .digit-wrapper {
+        animation: none !important;
+        opacity: 1 !important;
+        transition: none !important;
+      }
+      .word {
+        animation: none !important;
+        opacity: var(--wo, 0.9) !important;
+        transition: fill 0.5s ease !important;
+      }
+      .shimmer-rect  { animation: none !important; opacity: 0 !important; }
+      .digit-wrapper .digit-svg g  { transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- § Page header — full-width nav bar -->
+  <header>
+
+    <!-- Left: identity + location -->
+    <div class="header-identity">
+      <span class="header-title">Typography Digits by Shaz Moghaddam</span>
+      <span class="header-sep">•</span>
+      <span class="header-location">London, UK</span>
+    </div>
+
+    <!-- Right: two-row — links above, controls below -->
+    <div class="header-right">
+
+      <nav class="header-links" aria-label="External links">
+        <a href="https://www.linkedin.com/in/shazmoghaddam/" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+        <a href="https://shazmoghaddam.github.io/" target="_blank" rel="noopener noreferrer">Website</a>
+      </nav>
+
+      <div class="controls">
+
+        <!-- 1. Animation toggle -->
+        <label class="toggle-pill" title="Toggle word animations">
+          <input type="checkbox" id="toggle-anim" checked />
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          <span class="toggle-label">Anim</span>
+        </label>
+
+        <!-- 2. Background toggle -->
+        <label class="toggle-pill" title="Toggle light background">
+          <input type="checkbox" id="toggle-bg" />
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          <span class="toggle-label">Light</span>
+        </label>
+
+        <!-- 3. Glow toggle -->
+        <label class="toggle-pill" title="Toggle neon glow">
+          <input type="checkbox" id="toggle-glow" />
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          <span class="toggle-label">Glow</span>
+        </label>
+
+        <!-- 4. Speed slider -->
+        <label class="toggle-pill speed-control" title="Animation speed (drag left = slower, right = faster)">
+          <span class="toggle-label">Speed</span>
+          <input type="range" id="speed-slider" class="speed-slider"
+                 min="0.3" max="3" step="0.1" value="1" />
+        </label>
+
+        <!-- 5. Palette cycle -->
+        <button class="palette-btn" id="palette-btn" title="Cycle colour palette">
+          <span id="palette-label">Vibrant</span>
+          <span class="palette-arrow">›</span>
+        </button>
+
+        <!-- 6. Add custom word -->
+        <div class="word-input-wrap">
+          <button class="add-word-btn" id="add-word-btn" title="Add a word to the pool">+</button>
+          <div class="word-popover" id="word-popover" hidden>
+            <input type="text" class="word-text-input" id="word-text-input"
+                   placeholder="add a word…" maxlength="28" autocomplete="off" />
+            <button class="word-submit-btn" id="word-submit">↵</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </header>
+
+  <!-- § Loading skeleton (replaced by grid on fonts.ready) -->
+  <div class="loading-skeleton" id="skeleton" aria-hidden="true">
+    <div class="skeleton-cell"></div><div class="skeleton-cell"></div>
+    <div class="skeleton-cell"></div><div class="skeleton-cell"></div>
+    <div class="skeleton-cell"></div><div class="skeleton-cell"></div>
+    <div class="skeleton-cell"></div><div class="skeleton-cell"></div>
+    <div class="skeleton-cell"></div><div class="skeleton-cell"></div>
+  </div>
+
+  <!-- § Digit grid — injected by JS after font load -->
+  <main class="digits-grid" id="digits-grid" style="display:none;"></main>
+
+  <script>
+  /* ════════════════════════════════════════════════════════════════════
+     ╔══════════════════════════════════════════════════════════════════╗
+     ║  CONFIGURATION — edit freely                                     ║
+     ╚══════════════════════════════════════════════════════════════════╝
+     ════════════════════════════════════════════════════════════════════ */
+
+  /**
+   * WORDS — the vocabulary pool drawn from when populating digits.
+   *
+   * Tips for best results:
+   *  • A mix of short tokens (AI, SQL, Git) and multi-word phrases
+   *    gives the layout engine options at every size tier.
+   *  • Repeated entries (like "Shaz Moghaddam" × 4) increase the
+   *    probability that they appear prominently in each digit.
+   */
+  const WORDS = [
+    /* ── Identity ── */
+    "Shaz Moghaddam", "Shaz Moghaddam", "Shaz Moghaddam", "Shaz Moghaddam",
+    "Shaz", "Moghaddam",
+
+    /* ── Core disciplines ── */
+    "data science", "machine learning", "deep learning",
+    "app development", "data analysis", "neural network",
+    "algorithm", "Python", "API",
+
+    /* ── Short filler tokens (essential for tight packing at small sizes) ── */
+    "AI", "ML", "NLP", "LLM", "SQL", "CSS", "HTML", "Git",
+    "ETL", "GCP", "AWS", "OOP", "GPT", "BERT", "CI/CD",
+    "DevOps", "MLOps", "AUC", "F1", "R",
+
+    /* ── Languages & frameworks ── */
+    "JavaScript", "TypeScript", "React", "Node.js", "Vue.js",
+    "TensorFlow", "PyTorch", "scikit-learn", "pandas", "NumPy",
+    "Flask", "Django", "FastAPI", "GraphQL", "JSON",
+    "Scala", "Next.js", "Svelte", "R lang",
+
+    /* ── Data & storage ── */
+    "MongoDB", "PostgreSQL", "Redis", "Hadoop", "Spark",
+    "Kafka", "Tableau", "Power BI", "big data", "data viz",
+
+    /* ── Cloud & DevOps ── */
+    "Docker", "Kubernetes", "Terraform", "Azure", "cloud", "GitHub",
+
+    /* ── ML / AI concepts ── */
+    "transformer", "embedding", "attention", "encoder", "decoder",
+    "pipeline", "training", "validation", "regression", "clustering",
+    "gradient", "backprop", "dropout", "epoch", "accuracy",
+    "precision", "recall", "overfitting", "inference", "forecasting",
+
+    /* ── Statistics & maths ── */
+    "statistics", "probability", "Bayesian", "linear algebra",
+
+    /* ── Software engineering ── */
+    "debugging", "testing", "refactoring", "agile", "scrum",
+    "microservices", "automation",
+  ];
+
+  /**
+   * COLOUR_RULES — ordered keyword→class lookup; first match wins.
+   *
+   * Format:  [ "substring (lowercase)", "w-class-name" ]
+   *
+   * Class names map to CSS variables in § 7.
+   * To change a word's colour: update the class name here.
+   * To add a new rule: prepend it (higher priority = earlier entry).
+   */
+  const COLOUR_RULES = [
+    /* Identity → crimson */
+    ["shaz",            "w-crimson"],
+    ["moghaddam",       "w-crimson"],
+    ["transformer",     "w-crimson"],
+
+    /* Data science → gold */
+    ["data science",    "w-gold"],
+    ["data viz",        "w-gold-deep"],
+    ["data analysis",   "w-gold-deep"],
+
+    /* JS / App dev → amber */
+    ["app development", "w-amber"],
+    ["javascript",      "w-amber"],
+    ["node.js",         "w-amber"],
+    ["vue.js",          "w-amber"],
+    ["next.js",         "w-amber"],
+    ["svelte",          "w-amber"],
+
+    /* Deep learning / neural → vermillion */
+    ["deep learning",   "w-vermillion"],
+    ["neural",          "w-vermillion"],
+    ["backprop",        "w-vermillion"],
+    ["gradient",        "w-vermillion"],
+
+    /* SQL / AWS / data infra → orange */
+    ["sql",             "w-orange"],
+    ["aws",             "w-orange"],
+    ["pipeline",        "w-orange"],
+    ["etl",             "w-orange"],
+    ["hadoop",          "w-orange"],
+    ["spark",           "w-orange"],
+    ["kafka",           "w-orange"],
+
+    /* Python / cloud / web → blue */
+    ["python",          "w-blue"],
+    ["typescript",      "w-blue"],
+    ["react",           "w-blue"],
+    ["css",             "w-blue"],
+    ["docker",          "w-blue"],
+    ["cloud",           "w-blue"],
+    ["graphql",         "w-blue"],
+    ["json",            "w-blue"],
+    ["flask",           "w-blue"],
+    ["django",          "w-blue"],
+    ["fastapi",         "w-blue"],
+
+    /* ML / algorithms → lavender */
+    ["machine learning","w-lavender"],
+    ["algorithm",       "w-lavender"],
+    ["regression",      "w-lavender"],
+    ["clustering",      "w-lavender"],
+    ["scikit",          "w-lavender"],
+    ["validation",      "w-lavender"],
+    ["overfitting",     "w-lavender"],
+    ["dropout",         "w-lavender"],
+    ["epoch",           "w-lavender"],
+    ["accuracy",        "w-lavender"],
+    ["precision",       "w-lavender"],
+
+    /* NLP / language models → aqua */
+    ["nlp",             "w-aqua"],
+    ["gpt",             "w-aqua"],
+    ["llm",             "w-aqua"],
+    ["bert",            "w-aqua"],
+    ["embedding",       "w-aqua"],
+    ["attention",       "w-aqua"],
+    ["encoder",         "w-aqua"],
+    ["decoder",         "w-aqua"],
+    ["r lang",          "w-aqua"],
+
+    /* Kubernetes / CI-CD / infra → teal */
+    ["kubernetes",      "w-teal"],
+    ["ci/cd",           "w-teal"],
+    ["git",             "w-teal"],
+    ["terraform",       "w-teal"],
+    ["azure",           "w-teal"],
+    ["gcp",             "w-teal"],
+    ["github",          "w-teal"],
+
+    /* PyTorch / TensorFlow → red */
+    ["pytorch",         "w-red"],
+    ["tensorflow",      "w-red"],
+
+    /* Debugging / testing → coral */
+    ["debugging",       "w-coral"],
+    ["testing",         "w-coral"],
+    ["refactoring",     "w-coral"],
+
+    /* Statistics / maths → sage */
+    ["statistics",      "w-sage"],
+    ["probability",     "w-sage"],
+    ["bayesian",        "w-sage"],
+    ["forecasting",     "w-sage"],
+    ["inference",       "w-sage"],
+    ["f1",              "w-sage"],
+    ["auc",             "w-sage"],
+    ["linear algebra",  "w-sage"],
+
+    /* DevOps / infra → olive */
+    ["devops",          "w-olive"],
+    ["mlops",           "w-olive"],
+    ["microservices",   "w-olive"],
+    ["automation",      "w-olive"],
+    ["agile",           "w-olive"],
+    ["scrum",           "w-olive"],
+
+    /* HTML / big data → tangerine */
+    ["html",            "w-tangerine"],
+    ["big data",        "w-tangerine"],
+    ["tableau",         "w-tangerine"],
+    ["power bi",        "w-tangerine"],
+
+    /* pandas / NumPy / storage → gold-deep */
+    ["pandas",          "w-gold-deep"],
+    ["numpy",           "w-gold-deep"],
+    ["mongodb",         "w-gold-deep"],
+    ["redis",           "w-gold-deep"],
+
+    /* General / fallback → slate */
+    ["scala",           "w-slate"],
+    ["oop",             "w-slate"],
+    ["r",               "w-slate"],
+  ];
+
+  /** Full colour pool — used when no COLOUR_RULE matches */
+  const COLOUR_POOL = [
+    "w-gold", "w-gold-deep", "w-amber",
+    "w-vermillion", "w-orange", "w-red", "w-coral", "w-tangerine",
+    "w-blue", "w-slate",
+    "w-crimson", "w-lavender",
+    "w-aqua", "w-sage", "w-teal",
+    "w-olive",
+  ];
+
+  /* ════════════════════════════════════════════════════════════════════
+     SVG / CANVAS GEOMETRY
+     ════════════════════════════════════════════════════════════════════ */
+
+  const VW = 300;                        // SVG viewBox width  (px)
+  const VH = 400;                        // SVG viewBox height (px)
+  const CLIP_FS = Math.round(VH * 0.96); // 384 — digit character font-size
+  const CLIP_X  = VW / 2;               // 150 — digit centred horizontally
+  const CLIP_Y  = VH - 5;               // 395 — digit baseline (near bottom edge)
+
+  /**
+   * The clip-path font spec.  Must be identical in:
+   *   a) buildMask()   → canvas renders the pixel mask
+   *   b) buildSVG()    → SVG clipPath clips the words
+   * Both must match so the collision-tested positions land inside the clip.
+   */
+  const CLIP_FONT = `900 ${CLIP_FS}px Roboto, "Arial Black", Arial, sans-serif`;
+
+  /* ════════════════════════════════════════════════════════════════════
+     PLACEMENT TIERS
+     ─────────────────────────────────────────────────────────────────
+     Four tiers work outward from large anchors to tiny gap-fillers.
+     Increasing `tries` gives more coverage; increasing `target` places
+     more words per tier.  Lower font sizes are tried last so large
+     words get first pick of premium centre positions.
+
+     lineH: bounding-box height multiplier (cap + descenders + leading)
+     ════════════════════════════════════════════════════════════════════ */
+  const TIERS = [
+    { minFs: 18, maxFs: 26, weight: 700, target: 12,  tries:  900, lineH: 1.10 }, // Large anchors
+    { minFs: 11, maxFs: 18, weight: 700, target: 35,  tries: 1800, lineH: 1.12 }, // Medium fill
+    { minFs:  7, maxFs: 11, weight: 400, target: 80,  tries: 3500, lineH: 1.15 }, // Small fill
+    { minFs:  5, maxFs:  7, weight: 400, target: 70,  tries: 3000, lineH: 1.18 }, // Tiny gap-fill
+  ];
+
+  /**
+   * DIGIT_TINTS — a subtle background tint colour per digit (0–9).
+   * Applied as a low-opacity rect inside the clipped group, behind
+   * all words, giving each digit a unique chromatic identity.
+   */
+  const DIGIT_TINTS = {
+    0: '#6DE1D2',   // aqua
+    1: '#FFC81E',   // gold
+    2: '#EA2264',   // crimson
+    3: '#36ADA3',   // teal
+    4: '#0046FF',   // blue
+    5: '#FF4400',   // vermillion
+    6: '#CB9DF0',   // lavender
+    7: '#FA8112',   // orange
+    8: '#6A9C89',   // sage
+    9: '#FF6500',   // tangerine
+  };
+
+  /**
+   * WORD_PADDING — minimum gap (SVG units) between any two word boxes.
+   * 1.5 gives tight but readable packing without touching edges.
+   */
+  const WORD_PADDING = 1.5;
+
+  /**
+   * SOFT_THRESHOLD — fraction of the 5×5 sample grid that must fall
+   * inside the white glyph region (Gate B — soft constraint).
+   *
+   * 0.50 = half the box may overhang the edge.
+   * This is intentionally low so words can hug the digit's contour;
+   * the SVG clipPath cleanly trims any overflow.
+   * Gate A (hard) — the exact centre pixel — guards against
+   * fully-outside placements.
+   */
+  const SOFT_THRESHOLD = 0.50;
+
+  /* ════════════════════════════════════════════════════════════════════
+     HELPERS
+     ════════════════════════════════════════════════════════════════════ */
+
+  function pickColour(word) {
+    const lc = word.toLowerCase();
+    for (const [key, cls] of COLOUR_RULES) {
+      if (lc.includes(key)) return cls;
+    }
+    return COLOUR_POOL[Math.floor(Math.random() * COLOUR_POOL.length)];
+  }
+
+  function rndWord() {
+    return WORDS[Math.floor(Math.random() * WORDS.length)];
+  }
+
+  /* ════════════════════════════════════════════════════════════════════
+     STEP 1 — BUILD PIXEL MASK
+     Renders the digit in white on black to an offscreen canvas.
+     Returns the raw ImageData so we can sample pixel brightness.
+     ════════════════════════════════════════════════════════════════════ */
+  function buildMask(digit) {
+    const c   = document.createElement('canvas');
+    c.width   = VW;
+    c.height  = VH;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, VW, VH);
+    ctx.fillStyle     = '#fff';
+    ctx.font          = CLIP_FONT;
+    ctx.textAlign     = 'center';
+    ctx.textBaseline  = 'alphabetic';
+    ctx.fillText(String(digit), CLIP_X, CLIP_Y);
+    return ctx.getImageData(0, 0, VW, VH);
+  }
+
+  /* ════════════════════════════════════════════════════════════════════
+     STEP 2a — TWO-GATE MASK TEST
+     ─────────────────────────────────────────────────────────────────
+     Gate A (hard): the centre pixel of the candidate box must be a
+       white pixel (inside the digit).  This prevents any word whose
+       body lands outside the glyph from being accepted.
+
+     Gate B (soft): a 5×5 sample grid across the full bounding box must
+       have ≥ SOFT_THRESHOLD fraction of points on white pixels.
+       At 0.50, up to half the box may overhang the glyph edge —
+       this is exactly what lets words sit on the contour boundary and
+       define the digit's shape.  The SVG clipPath trims the overflow.
+     ════════════════════════════════════════════════════════════════════ */
+  function isInsideMask(mask, x, y, w, h) {
+    /* ── Gate A: centre pixel must be strictly inside ── */
+    const cx  = Math.round(x + w * 0.5);
+    const cy  = Math.round(y + h * 0.5);
+    if (cx < 0 || cx >= VW || cy < 0 || cy >= VH) return false;
+    if (mask.data[(cy * VW + cx) * 4] < 128) return false;
+
+    /* ── Gate B: soft 5×5 grid threshold ── */
+    const ROWS = 5, COLS = 5;
+    let inside = 0, total = 0;
+    for (let r = 0; r <= ROWS; r++) {
+      for (let c = 0; c <= COLS; c++) {
+        const px = Math.round(x + w * c / COLS);
+        const py = Math.round(y + h * r / ROWS);
+        total++;
+        if (px < 0 || px >= VW || py < 0 || py >= VH) continue;
+        if (mask.data[(py * VW + px) * 4] > 128) inside++;
+      }
+    }
+    return inside / total >= SOFT_THRESHOLD;
+  }
+
+  /* ════════════════════════════════════════════════════════════════════
+     STEP 2b — AABB COLLISION TEST
+     Checks whether `rect` overlaps any already-placed box.
+     A gap of WORD_PADDING is enforced on all four sides.
+     ════════════════════════════════════════════════════════════════════ */
+  function collides(rect, placed) {
+    const P = WORD_PADDING;
+    return placed.some(p =>
+      rect.x <  p.x + p.w + P &&
+      rect.x + rect.w + P > p.x &&
+      rect.y <  p.y + p.h + P &&
+      rect.y + rect.h + P > p.y
+    );
+  }
+
+  /* ════════════════════════════════════════════════════════════════════
+     STEP 3 — PLACE WORDS
+     Iterates through TIERS (large → medium → small → tiny).
+     For each tier, fires `tier.tries` random candidate positions and
+     accepts those that pass both mask gates and the collision check.
+
+     placed[]  — collision boxes { x, y, w, h }  (top-left origin)
+     result[]  — SVG word records { word, x, svgY, fs, fw, col }
+     ════════════════════════════════════════════════════════════════════ */
+  function placeWords(mask) {
+    /* Reuse a single off-screen canvas for text measurement */
+    const mc   = document.createElement('canvas');
+    mc.width   = VW;
+    mc.height  = VH;
+    const mCtx = mc.getContext('2d');
+
+    const placed = [];   // accepted bounding boxes (for collision detection)
+    const result = [];   // word placement data (for SVG generation)
+
+    for (const tier of TIERS) {
+      const { minFs, maxFs, weight, target, tries, lineH } = tier;
+      let count = 0;
+
+      for (let attempt = 0; attempt < tries && count < target; attempt++) {
+        const word = rndWord();
+        const fs   = minFs + Math.random() * (maxFs - minFs);
+
+        /* Measure the word's rendered width at this size */
+        mCtx.font = `${weight} ${fs}px Roboto, Arial, sans-serif`;
+        const tw  = mCtx.measureText(word).width;
+        const th  = fs * lineH;   // approximate cap-height + descenders
+
+        if (tw < 1) continue;     // skip degenerate cases
+
+        /* Random top-left position within the viewBox */
+        const x = 1 + Math.random() * Math.max(1, VW - tw - 2);
+        const y = 1 + Math.random() * Math.max(1, VH - th - 2);
+
+        const box = { x, y, w: tw, h: th };
+
+        /* Reject: not enough of the box falls inside the digit glyph */
+        if (!isInsideMask(mask, x, y, tw, th)) continue;
+
+        /* Reject: overlaps an already-placed word */
+        if (collides(box, placed)) continue;
+
+        /* ✓ Accept */
+        placed.push(box);
+        result.push({
+          word,
+          x,
+          /*
+           * SVG <text> y = baseline (alphabetic).
+           * Roboto's cap-height ≈ 72 % of font-size above the baseline,
+           * so baseline from box top ≈ fontSize × 0.78.
+           */
+          svgY: y + fs * 0.78,
+          fs:   fs.toFixed(1),
+          fw:   weight,
+          col:  pickColour(word),
+        });
+        count++;
+      }
+    }
+
+    return result;
+  }
+
+  /* ════════════════════════════════════════════════════════════════════
+     STEP 4 — BUILD SVG
+     Wraps the placed words in a clipPath so only the portions inside
+     the digit outline are visible.  Because Gate B allows words to
+     overhang the contour, the clipPath is what produces the clean edge.
+     ════════════════════════════════════════════════════════════════════ */
+  let _uid = 0;
+
+  function buildSVG(digit, words) {
+    const clipId  = `clip-${digit}-${++_uid}`;
+    const shimId  = `sg-${clipId}`;                 // unique shimmer gradient ID
+    const shimDel = (Math.random() * 7).toFixed(2); // 0–7 s stagger so digits gleam at different times
+
+    const wordEls = words.map(w => {
+      const wo  = (0.75 + Math.random() * 0.25).toFixed(2);
+      const dur = (4    + Math.random() * 5   ).toFixed(2);
+      const del = (Math.random() * 5          ).toFixed(2);
+      return (
+        `<text` +
+        ` class="word ${w.col}"` +
+        ` x="${w.x.toFixed(2)}"` +
+        ` y="${w.svgY.toFixed(2)}"` +
+        ` font-size="${w.fs}"` +
+        ` font-weight="${w.fw}"` +
+        ` font-family="Roboto, Arial, Helvetica, sans-serif"` +
+        ` data-dur="${dur}"` +
+        ` style="--wo:${wo};animation:wordLife ${dur}s ${del}s ease-in-out infinite both"` +
+        `>${w.word}</text>`
+      );
+    }).join('');
+
+    return (
+      `<svg` +
+      ` viewBox="0 0 ${VW} ${VH}"` +
+      ` xmlns="http://www.w3.org/2000/svg"` +
+      ` class="digit-svg"` +
+      ` role="img"` +
+      ` aria-label="Digit ${digit} formed by programming and data-science words"` +
+      `>` +
+        `<defs>` +
+          /* ── Digit clip path ── */
+          `<clipPath id="${clipId}">` +
+            `<text` +
+            ` x="${CLIP_X}" y="${CLIP_Y}"` +
+            ` font-size="${CLIP_FS}" font-weight="900"` +
+            ` text-anchor="middle"` +
+            ` font-family="Roboto,'Arial Black',Arial,sans-serif"` +
+            `>${digit}</text>` +
+          `</clipPath>` +
+          /* ── Shimmer gradient: bright band at 50 % of rect width ── */
+          `<linearGradient id="${shimId}" x1="0%" y1="0%" x2="100%" y2="0%">` +
+            `<stop offset="0%"   stop-color="white" stop-opacity="0"   />` +
+            `<stop offset="42%"  stop-color="white" stop-opacity="0"   />` +
+            `<stop offset="50%"  stop-color="white" stop-opacity="0.55"/>` +
+            `<stop offset="58%"  stop-color="white" stop-opacity="0"   />` +
+            `<stop offset="100%" stop-color="white" stop-opacity="0"   />` +
+          `</linearGradient>` +
+        `</defs>` +
+        `<g clip-path="url(#${clipId})">` +
+          /* Per-digit identity tint — very low opacity, sits behind all words */
+          `<rect x="0" y="0" width="${VW}" height="${VH}"` +
+          ` fill="${DIGIT_TINTS[digit] || '#ffffff'}" opacity="0.07"/>` +
+          wordEls +
+          /* Shimmer rect: starts at x=-VW (off-screen left).
+             CSS shimmerSweep translates it +2×VW across the digit.
+             Unique delay staggers gleams between digits.            */
+          `<rect class="shimmer-rect"` +
+          ` x="-${VW}" y="0" width="${VW}" height="${VH}"` +
+          ` fill="url(#${shimId})"` +
+          ` style="animation-delay:${shimDel}s"/>` +
+        `</g>` +
+      `</svg>`
+    );
+  }
+
+  /* ════════════════════════════════════════════════════════════════════
+     RENDER — waits for Roboto to load so canvas metrics match SVG
+     ════════════════════════════════════════════════════════════════════ */
+  const grid     = document.getElementById('digits-grid');
+  const skeleton = document.getElementById('skeleton');
+
+  document.fonts.ready.then(() => {
+    /* Swap skeleton → real grid */
+    skeleton.style.display = 'none';
+    grid.style.display     = '';
+
+    for (let d = 0; d <= 9; d++) {
+      /* Build pixel mask for this digit */
+      const mask  = buildMask(d);
+
+      /* Place words using collision detection */
+      const words = placeWords(mask);
+
+      /* Generate and inject SVG */
+      const wrapper = document.createElement('div');
+      wrapper.className = 'digit-wrapper';
+      wrapper.dataset.digit = d;                       // needed for dblclick regenerate
+      wrapper.style.animationDelay = `${d * 0.08}s`;
+      wrapper.setAttribute('aria-label', `Digit ${d}`);
+      wrapper.innerHTML = buildSVG(d, words);
+      wrapper.addEventListener('mousemove', onTiltMove);
+      wrapper.addEventListener('mouseleave', onTiltLeave);
+      grid.appendChild(wrapper);
+    }
+  });
+
+  /* ════════════════════════════════════════════════════════════════════
+     SHARED STATE
+     ════════════════════════════════════════════════════════════════════ */
+  let currentSpeed    = 1;       // slider value; 1 = normal
+  let isRegenerating  = false;   // blocks click-flash during rebuild
+
+  /* ════════════════════════════════════════════════════════════════════
+     FEATURE 1 — 3D TILT (per-wrapper mousemove/leave)
+     Applies a perspective rotateX/Y transform based on cursor position.
+     Resets smoothly on mouse-leave via CSS transition: transform.
+     ════════════════════════════════════════════════════════════════════ */
+  function onTiltMove(e) {
+    const r  = this.getBoundingClientRect();
+    const dx = (e.clientX - (r.left + r.width  / 2)) / (r.width  / 2);
+    const dy = (e.clientY - (r.top  + r.height / 2)) / (r.height / 2);
+    this.style.transform =
+      `perspective(500px) rotateX(${(-dy * 10).toFixed(1)}deg) rotateY(${(dx * 10).toFixed(1)}deg) scale(1.04)`;
+  }
+  function onTiltLeave() { this.style.transform = ''; }
+
+  /* ════════════════════════════════════════════════════════════════════
+     FEATURE 2 — DOUBLE-CLICK REGENERATE
+     Replaces a single digit's SVG with a fresh word layout.
+     Restarts the curtain animation and re-applies current speed.
+     ════════════════════════════════════════════════════════════════════ */
+  grid.addEventListener('dblclick', function (e) {
+    const wrapper = e.target.closest('.digit-wrapper');
+    if (!wrapper) return;
+    isRegenerating = true;
+    const d     = parseInt(wrapper.dataset.digit);
+    const mask  = buildMask(d);
+    const words = placeWords(mask);
+    wrapper.innerHTML = buildSVG(d, words);
+    wrapper.classList.remove('digit-flash');
+    wrapper.style.animation = 'none';
+    void wrapper.offsetWidth;
+    wrapper.style.animation  = '';
+    wrapper.style.animationDelay = '0s';
+    if (currentSpeed !== 1) applySpeedToWrapper(wrapper, currentSpeed);
+    setTimeout(() => { isRegenerating = false; }, 500);
+  });
+
+  /* ════════════════════════════════════════════════════════════════════
+     FEATURE 5 — CLICK FLASH (single click only)
+     ════════════════════════════════════════════════════════════════════ */
+  grid.addEventListener('click', function (e) {
+    if (isRegenerating) return;
+    const wrapper = e.target.closest('.digit-wrapper');
+    if (!wrapper) return;
+    wrapper.classList.remove('digit-flash');
+    void wrapper.offsetWidth;
+    wrapper.classList.add('digit-flash');
+    setTimeout(() => wrapper.classList.remove('digit-flash'), 1500);
+  });
+
+  /* ════════════════════════════════════════════════════════════════════
+     TOGGLE CONTROLS
+     ════════════════════════════════════════════════════════════════════ */
+  document.getElementById('toggle-anim').addEventListener('change', function () {
+    document.body.classList.toggle('anim-off', !this.checked);
+  });
+
+  document.getElementById('toggle-bg').addEventListener('change', function () {
+    document.body.classList.toggle('bg-light', this.checked);
+  });
+
+  /* FEATURE 3 — GLOW toggle */
+  document.getElementById('toggle-glow').addEventListener('change', function () {
+    document.body.classList.toggle('glow-on', this.checked);
+  });
+
+  /* FEATURE 5 — SPEED SLIDER
+     Scales animationDuration on all .word and .shimmer-rect elements. */
+  function applySpeedToWrapper(wrapper, factor) {
+    wrapper.querySelectorAll('.word').forEach(el => {
+      const base = parseFloat(el.dataset.dur || 6);
+      el.style.animationDuration = `${(base / factor).toFixed(2)}s`;
+    });
+    const shimmer = wrapper.querySelector('.shimmer-rect');
+    if (shimmer) shimmer.style.animationDuration = `${(12 / factor).toFixed(2)}s`;
+  }
+
+  document.getElementById('speed-slider').addEventListener('input', function () {
+    currentSpeed = parseFloat(this.value);
+    document.querySelectorAll('.digit-wrapper')
+      .forEach(w => applySpeedToWrapper(w, currentSpeed));
+  });
+
+  /* FEATURE 6 — PALETTE CYCLE */
+  const PALETTE_NAMES = ['Vibrant', 'Cool', 'Warm'];
+  let paletteIndex = 0;
+
+  document.getElementById('palette-btn').addEventListener('click', function () {
+    paletteIndex = (paletteIndex + 1) % PALETTE_NAMES.length;
+    document.body.dataset.palette = paletteIndex;
+    document.getElementById('palette-label').textContent = PALETTE_NAMES[paletteIndex];
+  });
+
+  /* FEATURE 7 — CUSTOM WORD INPUT
+     Adds the typed word to WORDS pool (twice for frequency boost),
+     then regenerates all 10 digits with the new vocabulary.         */
+  function regenerateAll() {
+    isRegenerating = true;
+    document.querySelectorAll('.digit-wrapper').forEach((wrapper, i) => {
+      const d     = parseInt(wrapper.dataset.digit);
+      const mask  = buildMask(d);
+      const words = placeWords(mask);
+      wrapper.innerHTML = buildSVG(d, words);
+      wrapper.classList.remove('digit-flash');
+      wrapper.style.animation = 'none';
+      void wrapper.offsetWidth;
+      wrapper.style.animation      = '';
+      wrapper.style.animationDelay = `${i * 0.06}s`;
+      if (currentSpeed !== 1) applySpeedToWrapper(wrapper, currentSpeed);
+    });
+    setTimeout(() => { isRegenerating = false; }, 700);
+  }
+
+  function submitWord() {
+    const input = document.getElementById('word-text-input');
+    const word  = input.value.trim();
+    if (!word) return;
+    WORDS.push(word);
+    WORDS.push(word);   // push twice for higher frequency
+    input.value = '';
+    document.getElementById('word-popover').hidden = true;
+    regenerateAll();
+  }
+
+  document.getElementById('add-word-btn').addEventListener('click', function (e) {
+    e.stopPropagation();
+    const popover = document.getElementById('word-popover');
+    popover.hidden = !popover.hidden;
+    if (!popover.hidden) setTimeout(() => document.getElementById('word-text-input').focus(), 50);
+  });
+
+  document.getElementById('word-submit').addEventListener('click', submitWord);
+
+  document.getElementById('word-text-input').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter')  { e.preventDefault(); submitWord(); }
+    if (e.key === 'Escape') { document.getElementById('word-popover').hidden = true; }
+  });
+
+  /* Close popover on outside click */
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('.word-input-wrap')) {
+      const p = document.getElementById('word-popover');
+      if (p && !p.hidden) p.hidden = true;
+    }
+  });
+
+  /* FEATURE 4 — prefers-reduced-motion is handled entirely in CSS § 20 */
+  </script>
+</body>
+</html>
