@@ -1,7 +1,7 @@
 # Typography Digits
 ### Generative Word-Cloud Art · Shaz Moghaddam · London, UK
 
-[🔗 LinkedIn](https://www.linkedin.com/in/shazmoghaddam/) &nbsp;|&nbsp; [🌐 Website](https://shazmoghaddam.github.io/) &nbsp;|&nbsp; [![Licence: CC BY 4.0](https://img.shields.io/badge/Licence-CC%20BY%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by/4.0/)
+[🔗 LinkedIn](https://www.linkedin.com/in/shazmoghaddam/) &nbsp;|&nbsp; [🌐 Website](https://shazmoghaddam.github.io/) &nbsp;|&nbsp; [![Licence: MIT](https://img.shields.io/badge/Licence-MIT-lightgrey.svg)](./LICENSE)
 
 ---
 
@@ -125,8 +125,4 @@ Everything is documented inline. Key entry points:
 
 ## Licence
 
-This project is licensed under the **Creative Commons Attribution 4.0 International (CC BY 4.0)**.
-
-You are free to share and adapt this work for any purpose, including commercially, as long as you give appropriate credit to **Shaz Moghaddam** and indicate if changes were made.
-
-[View full licence →](./LICENSE.txt) &nbsp;|&nbsp; [creativecommons.org/licenses/by/4.0](https://creativecommons.org/licenses/by/4.0/)
+Released under the [MIT licence](./LICENSE). Free to use, change and share, including commercially, as long as the licence and copyright notice stay with it.
