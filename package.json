@@ -1,0 +1,24 @@
+{
+  "name": "typography-digits",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Generative art where the digits 0 to 9 are packed with programming and data science words.",
+  "author": "Shaz Moghaddam (https://shazmoghaddam.github.io/)",
+  "license": "MIT",
+  "homepage": "https://shazmoghaddam.github.io/typography-digits/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ShazMoghaddam/typography-digits.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test tests/smoke.mjs",
+    "build:assets": "node assets/build.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.65.1"
+  }
+}
